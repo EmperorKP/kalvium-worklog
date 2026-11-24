@@ -1,0 +1,50 @@
+{
+  "name": "kalvium-worklog",
+  "version": "1.8.0",
+  "description": "Auto-submit your daily Kalvium worklog without opening the website",
+  "keywords": [
+    "kalvium",
+    "worklog",
+    "automation",
+    "internship",
+    "daily-report"
+  ],
+  "license": "MIT",
+  "author": "",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EmperorKP/kalvium-worklog.git"
+  },
+  "homepage": "https://github.com/EmperorKP/kalvium-worklog#readme",
+  "bugs": {
+    "url": "https://github.com/EmperorKP/kalvium-worklog/issues"
+  },
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "kalvium-worklog": "dist/cli.js",
+    "kworklog": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build",
+    "clean": "rm -rf dist",
+    "postinstall": "node dist/postinstall.js"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "playwright": "^1.64.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
