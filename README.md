@@ -70,7 +70,7 @@ Catch-up (on login/wake, every 30 min):
   Check if today's worklog is submitted → if not, submit it
 
 Cloud mode (optional):
-  GitHub Actions checks every 30 min around the chosen time
+  GitHub Actions runs at the chosen time, then checks every 30 min for five hours
   Transient network failures retry up to 5 times (1 min apart)
   Rotated refresh token is written back to the private repo's KATTEND_TOKEN secret
 ```

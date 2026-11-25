@@ -152,19 +152,25 @@ function cloudLogin(cliPath: string, email?: string): void {
   }
 }
 
-export function cronFor(time: string, offsetMin = new Date().getTimezoneOffset()): string {
+export function cronFor(time: string, offsetMin = new Date().getTimezoneOffset()): string[] {
   const match = /^(\d{1,2}):(\d{2})$/.exec(time);
   if (!match) throw new Error(`Invalid time "${time}". Use HH:MM, e.g. 12:30`);
   const hour = Number(match[1]);
   const minute = Number(match[2]);
   if (hour > 23 || minute > 59) throw new Error(`Invalid time "${time}".`);
-  const hours = new Set<number>();
   const base = hour * 60 + minute + offsetMin;
-  for (let offset = -30; offset <= 240; offset += 30) {
+  const hoursByMinute = new Map<number, Set<number>>();
+  for (let offset = 0; offset <= 300; offset += 30) {
     const utcMinutes = ((base + offset) % 1440 + 1440) % 1440;
-    hours.add(Math.floor(utcMinutes / 60));
+    const utcHour = Math.floor(utcMinutes / 60);
+    const utcMinute = utcMinutes % 60;
+    const hours = hoursByMinute.get(utcMinute) ?? new Set<number>();
+    hours.add(utcHour);
+    hoursByMinute.set(utcMinute, hours);
   }
-  return `7,37 ${[...hours].sort((a, b) => a - b).join(",")} * * *`;
+  return [...hoursByMinute.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([minuteValue, hours]) => `${minuteValue} ${[...hours].sort((a, b) => a - b).join(",")} * * *`);
 }
 
 function workflowYaml(config: CloudConfig, version: string): string {
@@ -172,7 +178,7 @@ function workflowYaml(config: CloudConfig, version: string): string {
 name: Kalvium worklog
 on:
   schedule:
-    - cron: "${cronFor(config.time)}"
+${cronFor(config.time).map((cron) => `    - cron: "${cron}"`).join("\n")}
   workflow_dispatch:
 concurrency:
   group: kalvium-worklog
