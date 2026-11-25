@@ -312,6 +312,9 @@ export function cloudTest(): void {
 interface RecoveryState {
   attemptedRunId?: number;
   attemptedAt?: string;
+  dispatchDate?: string;
+  dispatchCount?: number;
+  lastDispatchAt?: string;
 }
 
 function recoveryStatePath(): string {
@@ -331,41 +334,105 @@ function saveRecoveryState(state: RecoveryState): void {
 }
 
 /**
- * Called by the Mac LaunchAgent. If a cloud run failed specifically because
- * Kalvium rejected its refresh token, reuse the saved Google browser session
- * and replace the cloud token secret. A six-hour cooldown prevents login loops.
+ * Called by the Mac LaunchAgent. It catches missing or failed cloud runs and
+ * repairs expired login tokens using the saved Google browser session.
  */
 export async function cloudMonitor(options: { cliPath: string; version: string }): Promise<void> {
-  const repo = readCloudConfig()?.cloudRepo;
+  const cloudConfig = readCloudConfig();
+  const repo = cloudConfig?.cloudRepo;
   if (!repo) return;
   requireGh();
 
   const list = gh([
-    "run", "list", "--repo", repo, "--workflow", "attendance.yml", "--limit", "1",
-    "--json", "databaseId,status,conclusion",
+    "run", "list", "--repo", repo, "--workflow", "attendance.yml", "--limit", "20",
+    "--json", "databaseId,event,status,conclusion,createdAt",
   ]);
   if (list.status !== 0) throw new Error((list.stderr || "Could not read recent cloud runs.").trim());
   const runs = JSON.parse(list.stdout || "[]") as Array<{
     databaseId: number;
+    event: string;
     status: string;
     conclusion: string | null;
+    createdAt: string;
   }>;
-  const latest = runs[0];
-  if (!latest || latest.status !== "completed" || latest.conclusion !== "failure") return;
+  const config = currentCloudConfig(repo);
+  const now = new Date();
+  const dateParts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: config.timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const datePart = (type: string) => dateParts.find((item) => item.type === type)?.value;
+  const date = `${datePart("year")}-${datePart("month")}-${datePart("day")}`;
+  const localParts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: config.timezone,
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(now);
+  const part = (type: string) => localParts.find((item) => item.type === type)?.value;
+  const weekday = part("weekday");
+  if (weekday === "Sat" || weekday === "Sun") return;
+  const currentMinutes = Number(part("hour")) * 60 + Number(part("minute"));
+  const scheduled = /^(\d{1,2}):(\d{2})$/.exec(config.time);
+  if (!scheduled || currentMinutes < Number(scheduled[1]) * 60 + Number(scheduled[2])) return;
+
+  const todaysRuns = runs.filter((run) => {
+    try {
+      const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: config.timezone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).formatToParts(new Date(run.createdAt));
+      const runDate = `${parts.find((item) => item.type === "year")?.value}-${parts.find((item) => item.type === "month")?.value}-${parts.find((item) => item.type === "day")?.value}`;
+      return runDate === date;
+    } catch {
+      return false;
+    }
+  });
+  const latest = todaysRuns[0];
+  if (todaysRuns.some((run) => run.status !== "completed")) return;
+  if (latest?.conclusion === "success") return;
+
+  const state = readRecoveryState();
+  const attempts = state.dispatchDate === date ? (state.dispatchCount ?? 0) : 0;
+  const lastDispatch = state.lastDispatchAt ? Date.parse(state.lastDispatchAt) : 0;
+  const dispatchRetry = (reason: string) => {
+    if (attempts >= 10 || Date.now() - lastDispatch < 25 * 60 * 1000) return;
+    runGh(["workflow", "run", "attendance.yml", "--repo", repo]);
+    saveRecoveryState({
+      ...state,
+      dispatchDate: date,
+      dispatchCount: attempts + 1,
+      lastDispatchAt: new Date().toISOString(),
+    });
+    log(`${reason}; dispatched cloud run ${attempts + 1}/10 for ${date}.`);
+  };
+
+  if (!latest) {
+    dispatchRetry("No cloud run exists for today after the scheduled time");
+    return;
+  }
+  if (latest.conclusion === "success") return;
 
   const runLog = gh(["run", "view", String(latest.databaseId), "--repo", repo, "--log-failed"]);
   if (runLog.status !== 0) return;
   const authFailure = /authentication expired|session expired or invalid|refresh token.{0,40}(invalid|expired)|HTTP 401|HTTP 403/i.test(runLog.stdout);
-  if (!authFailure) return;
+  if (!authFailure) {
+    dispatchRetry(`Cloud run ${latest.databaseId} failed without an authentication error`);
+    return;
+  }
 
-  const state = readRecoveryState();
   const attemptedAt = state.attemptedAt ? Date.parse(state.attemptedAt) : 0;
   if (state.attemptedRunId === latest.databaseId || Date.now() - attemptedAt < 6 * 60 * 60 * 1000) {
     return;
   }
 
   ensureInstallDir();
-  saveRecoveryState({ attemptedRunId: latest.databaseId, attemptedAt: new Date().toISOString() });
+  saveRecoveryState({ ...state, attemptedRunId: latest.databaseId, attemptedAt: new Date().toISOString() });
   log(`Cloud login failed in GitHub run ${latest.databaseId}; attempting browser re-login.`);
   try {
     cloudLogin(options.cliPath, readCloudConfig()?.email);
@@ -375,8 +442,9 @@ export async function cloudMonitor(options: { cliPath: string; version: string }
     const config = currentCloudConfig(repo);
     setSecret(repo, SECRET_CONFIG, secretConfig(config));
     putWorkflow(repo, workflowYaml(config, options.version));
-    saveRecoveryState({});
-    log("Cloud login refreshed and saved. GitHub Actions will retry on its next scheduled check.");
+    saveRecoveryState({ dispatchDate: date, dispatchCount: attempts, lastDispatchAt: state.lastDispatchAt });
+    log("Cloud login refreshed and saved; retrying the failed cloud run.");
+    dispatchRetry(`Cloud login recovered from run ${latest.databaseId}`);
   } catch (error) {
     log(`Cloud re-login could not complete: ${error instanceof Error ? error.message : String(error)}. Google may need you to finish sign-in in the browser.`);
   }

@@ -53,7 +53,7 @@ kalvium-worklog schedule 14:00  # daily auto-submit at 2 PM
 - **Network retry**: Retries up to 5 times on network failure (covers laptop waking up, internet reconnecting)
 - **Catch-up on wake**: If the scheduled time was missed (laptop asleep/offline), submits when the device wakes up
 - **GitHub Actions mode**: Runs while your Mac is off and saves rotated refresh tokens back to GitHub Secrets
-- **Cloud login recovery**: A macOS LaunchAgent checks failed cloud runs every 30 minutes and attempts a browser re-login when the refresh token is rejected
+- **Cloud recovery**: A macOS LaunchAgent checks every 30 minutes after the scheduled time, dispatches a run if GitHub missed it, retries failed runs, and attempts browser re-login when the refresh token is rejected
 
 ## How It Works
 
@@ -86,7 +86,7 @@ kalvium-worklog cloud init --repo owner/kalvium-attendance-cloud
 
 Cloud setup performs a separate Kalvium login and creates or updates a private repository workflow. It prompts for a fine-grained GitHub token restricted to that repository with **Secrets: read and write** permission. The token is entered in a hidden prompt and stored as `KATTEND_PAT`; the Kalvium refresh token and worklog configuration are stored as `KATTEND_TOKEN` and `KATTEND_CONFIG`.
 
-Use `kalvium-worklog cloud sync` after changing the local schedule or configuration. Use `kalvium-worklog cloud sync --login` to refresh the cloud login and replace its token secret. When you sync, macOS installs a local monitor that watches for failed cloud authentication and attempts a browser re-login with the saved Google session. If Google requires a password, two-step verification, or consent, finish that in the opened browser window. Remove the monitor with `kalvium-worklog cloud monitor --remove`.
+Use `kalvium-worklog cloud sync` after changing the local schedule or configuration. Use `kalvium-worklog cloud sync --login` to refresh the cloud login and replace its token secret. When you sync, macOS installs a local monitor that checks for a missing or failed run every 30 minutes after the scheduled time on weekdays. It dispatches a catch-up run when GitHub has no run for the day, retries failures up to ten times, and attempts browser re-login for authentication failures. The monitor needs the Mac user session, network access, and GitHub CLI authentication. If Google requires a password, two-step verification, or consent, finish that in the opened browser window. Remove the monitor with `kalvium-worklog cloud monitor --remove`.
 
 ## Token Lifecycle
 
