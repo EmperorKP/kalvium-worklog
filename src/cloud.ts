@@ -158,19 +158,37 @@ export function cronFor(time: string, offsetMin = new Date().getTimezoneOffset()
   const hour = Number(match[1]);
   const minute = Number(match[2]);
   if (hour > 23 || minute > 59) throw new Error(`Invalid time "${time}".`);
-  const base = hour * 60 + minute + offsetMin;
-  const hoursByMinute = new Map<number, Set<number>>();
+  const hoursByMinuteAndWeekday = new Map<number, Map<number, Set<number>>>();
   for (let offset = 0; offset <= 300; offset += 30) {
-    const utcMinutes = ((base + offset) % 1440 + 1440) % 1440;
+    const localMinutes = hour * 60 + minute + offset;
+    const utcAbsoluteMinutes = localMinutes + offsetMin;
+    const utcDayOffset = Math.floor(utcAbsoluteMinutes / 1440);
+    const utcMinutes = ((utcAbsoluteMinutes % 1440) + 1440) % 1440;
     const utcHour = Math.floor(utcMinutes / 60);
     const utcMinute = utcMinutes % 60;
-    const hours = hoursByMinute.get(utcMinute) ?? new Set<number>();
-    hours.add(utcHour);
-    hoursByMinute.set(utcMinute, hours);
+    for (let localWeekday = 1; localWeekday <= 5; localWeekday++) {
+      const utcWeekday = ((localWeekday + utcDayOffset) % 7 + 7) % 7;
+      const weekdays = hoursByMinuteAndWeekday.get(utcMinute) ?? new Map<number, Set<number>>();
+      const hours = weekdays.get(utcWeekday) ?? new Set<number>();
+      hours.add(utcHour);
+      weekdays.set(utcWeekday, hours);
+      hoursByMinuteAndWeekday.set(utcMinute, weekdays);
+    }
   }
-  return [...hoursByMinute.entries()]
+  return [...hoursByMinuteAndWeekday.entries()]
     .sort(([a], [b]) => a - b)
-    .map(([minuteValue, hours]) => `${minuteValue} ${[...hours].sort((a, b) => a - b).join(",")} * * *`);
+    .flatMap(([minuteValue, weekdays]) => {
+      const weekdaysByHours = new Map<string, number[]>();
+      for (const [weekday, hours] of weekdays) {
+        const hourList = [...hours].sort((a, b) => a - b).join(",");
+        const days = weekdaysByHours.get(hourList) ?? [];
+        days.push(weekday);
+        weekdaysByHours.set(hourList, days);
+      }
+      return [...weekdaysByHours.entries()].map(([hours, days]) =>
+        `${minuteValue} ${hours} * * ${days.sort((a, b) => a - b).join(",")}`
+      );
+    });
 }
 
 function workflowYaml(config: CloudConfig, version: string): string {
