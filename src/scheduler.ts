@@ -259,7 +259,10 @@ cloudMonitor({ cliPath: "${cliPath}", version: "${version}" }).catch((error) => 
   <key>Label</key><string>${CLOUD_REPAIR_LABEL}</string>
   <key>ProgramArguments</key><array><string>${nodeExecutable()}</string><string>${scriptPath}</string></array>
   <key>RunAtLoad</key><true/>
-  <key>StartInterval</key><integer>1800</integer>
+  <key>StartCalendarInterval</key><array>
+    <dict><key>Minute</key><integer>0</integer></dict>
+    <dict><key>Minute</key><integer>30</integer></dict>
+  </array>
   <key>StandardOutPath</key><string>${LOG_FILE}</string>
   <key>StandardErrorPath</key><string>${LOG_FILE}</string>
   <key>EnvironmentVariables</key><dict>
@@ -272,7 +275,7 @@ cloudMonitor({ cliPath: "${cliPath}", version: "${version}" }).catch((error) => 
   try {
     execSync(`launchctl bootstrap ${LAUNCHD_DOMAIN} "${plistPath}"`, { stdio: "ignore" });
     execSync(`launchctl kickstart -k ${LAUNCHD_DOMAIN}/${CLOUD_REPAIR_LABEL}`, { stdio: "ignore" });
-    console.log("Cloud auth recovery monitor installed (checks every 30 minutes).");
+    console.log("Cloud recovery monitor installed (checks at :00 and :30 each hour).");
     return true;
   } catch (error) {
     console.log(`Failed to install cloud recovery monitor: ${String(error)}`);
