@@ -76,5 +76,5 @@ if (alreadySetup) {
   log("");
 }
 
-log("  Docs: " + YELLOW + "https://github.com/kp/kalvium-worklog" + NC);
+log("  Docs: " + YELLOW + "https://github.com/EmperorKP/kalvium-worklog" + NC);
 log("");

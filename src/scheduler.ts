@@ -334,28 +334,37 @@ function setupCron(hour: number, minute: number): boolean {
   const dailyScript = copyDailyScript();
   const cronLine = `${minute} ${hour} * * 1-5 ${nodeExecutable()} ${dailyScript} >> ${LOG_FILE} 2>&1`;
 
-  // Read existing crontab
-  let crontab = "";
-  try {
-    crontab = execSync("crontab -l", { encoding: "utf-8" });
-  } catch {
-    // no crontab yet
-  }
-
-  // Remove existing kalvium entry
-  const lines = crontab
-    .split("\n")
-    .filter((line) => !line.includes("kalvium") && !line.includes("KalviumWorklog"));
-
-  // Add new entry
+  const lines = readCrontab().filter((line) => !isOwnCronLine(line));
   lines.push(cronLine);
-
-  // Write back
-  const newCrontab = lines.join("\n") + "\n";
-  execSync(`echo "${newCrontab.replace(/"/g, '\\"')}" | crontab -`);
+  try {
+    writeCrontab(lines);
+  } catch (error) {
+    console.log(`Failed to install cron entry: ${String(error)}`);
+    return false;
+  }
 
   console.log(`Daily auto-submit installed (${formatTime(hour, minute)} every weekday via cron)`);
   return true;
+}
+
+function readCrontab(): string[] {
+  try {
+    return execSync("crontab -l", { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] })
+      .split("\n")
+      .filter((line) => line.trim() !== "");
+  } catch {
+    return []; // no crontab yet
+  }
+}
+
+// Only our own entry: other jobs that merely mention "kalvium" must survive.
+function isOwnCronLine(line: string): boolean {
+  return line.includes(join(INSTALL_DIR, "daily_submit.js")) || line.includes("KalviumWorklog");
+}
+
+// Written through stdin so "$", quotes and backticks in other jobs are preserved.
+function writeCrontab(lines: string[]): void {
+  execSync("crontab -", { input: lines.length ? lines.join("\n") + "\n" : "" });
 }
 
 /**
@@ -403,11 +412,7 @@ export async function removeScheduler(): Promise<boolean> {
     return true;
   } else if (IS_LINUX) {
     try {
-      const crontab = execSync("crontab -l", { encoding: "utf-8" });
-      const lines = crontab
-        .split("\n")
-        .filter((line) => !line.includes("kalvium") && !line.includes("KalviumWorklog"));
-      execSync(`echo "${lines.join("\n")}" | crontab -`);
+      writeCrontab(readCrontab().filter((line) => !isOwnCronLine(line)));
     } catch {
       // ignore
     }

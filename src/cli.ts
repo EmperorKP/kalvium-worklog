@@ -5,10 +5,9 @@ import { captureToken } from "./capture-token.js";
 import { discoverPosition } from "./discover-position.js";
 import { submitWorklog, checkStatus, dailySubmit, catchUpSubmit } from "./submit.js";
 import { setupScheduler, removeScheduler } from "./scheduler.js";
-import { loadToken, saveConfig, getPositionIdFromToken } from "./config.js";
+import { CONFIG_FILE, TOKEN_FILE, loadToken, saveConfig, getPositionIdFromToken } from "./config.js";
 import { existsSync } from "fs";
 import { join, dirname } from "path";
-import { homedir } from "os";
 import { fileURLToPath } from "url";
 import { readFileSync } from "fs";
 import { cloudInit, cloudMonitorRemove, cloudRun, cloudStatus, cloudSync, cloudTest } from "./cloud.js";
@@ -77,7 +76,8 @@ program
   .command("status")
   .description("Check recent worklog entries")
   .action(async () => {
-    await checkStatus();
+    const ok = await checkStatus();
+    if (!ok) process.exit(1);
   });
 
 // ─── daily ─────────────────────────────────────────────────────────────────
@@ -119,8 +119,9 @@ program
   .option("--email <email>", "Google account for unattended account-chooser selection")
   .option("--reuse", "reuse the separately saved cloud login")
   .option("--login", "refresh the separate cloud login during sync")
+  .option("--pat", "replace the GitHub token secret during sync (hidden prompt)")
   .option("--remove", "remove the local cloud recovery monitor (for cloud monitor)")
-  .action(async (action: string, opts: { repo?: string; email?: string; reuse?: boolean; login?: boolean; remove?: boolean }) => {
+  .action(async (action: string, opts: { repo?: string; email?: string; reuse?: boolean; login?: boolean; pat?: boolean; remove?: boolean }) => {
     const cliPath = join(__dirname, "cli.js");
     switch (action) {
       case "init":
@@ -130,7 +131,7 @@ program
         await cloudRun();
         return;
       case "sync":
-        await cloudSync({ cliPath, version: VERSION, login: opts.login, email: opts.email });
+        await cloudSync({ cliPath, version: VERSION, login: opts.login, pat: opts.pat, email: opts.email });
         return;
       case "status":
         cloudStatus();
@@ -143,7 +144,7 @@ program
         else await cloudSync({ cliPath, version: VERSION, email: opts.email });
         return;
       default:
-        console.error("Use: kalvium-worklog cloud init | run | sync [--login] | status | test | monitor [--remove]");
+        console.error("Use: kalvium-worklog cloud init | run | sync [--login] [--pat] | status | test | monitor [--remove]");
         process.exitCode = 1;
     }
   });
@@ -292,8 +293,8 @@ program
 
 if (process.argv.length <= 2) {
   // Check if already set up
-  const tokenExists = existsSync(join(homedir(), ".kalvium", "refresh_token.json"));
-  const configExists = existsSync(join(homedir(), ".kalvium", "config.json"));
+  const tokenExists = existsSync(TOKEN_FILE);
+  const configExists = existsSync(CONFIG_FILE);
 
   if (!tokenExists || !configExists) {
     console.log("");
@@ -314,4 +315,9 @@ if (process.argv.length <= 2) {
   process.exit(0);
 }
 
-program.parse();
+// parseAsync so a failing async command exits non-zero with a readable message
+// instead of an unhandled-rejection stack trace.
+program.parseAsync().catch((error: unknown) => {
+  console.error(`ERROR: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
+});

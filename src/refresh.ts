@@ -1,29 +1,54 @@
-import { appendFileSync } from "fs";
-import { LOG_FILE, ensureInstallDir } from "./config.js";
+import {
+  CLIENT_ID,
+  KEYCLOAK_URL,
+  decodeJwt,
+  loadToken,
+  saveToken,
+  type TokenData,
+} from "./config.js";
 
-export function log(message: string): void {
-  ensureInstallDir();
-  const timestamp = new Date().toISOString().replace("T", " ").slice(0, 19);
-  const line = `${timestamp} ${message}\n`;
-  try {
-    appendFileSync(LOG_FILE, line);
-  } catch {
-    // ignore
-  }
-  console.log(message);
-}
+export { log } from "./config.js";
 
 export interface RefreshResult {
   success: boolean;
   accessToken?: string;
   error?: string;
   networkError?: boolean;
+  /** True when the stored access token was reused and nothing was rotated. */
+  cached?: boolean;
+}
+
+// Every refresh rotates the refresh token. Reusing a still-valid access token
+// keeps rotations (and, in cloud mode, secret writes) to about one per day.
+const MIN_REMAINING_SECONDS = 5 * 60;
+const MAX_AGE_SECONDS = 12 * 60 * 60;
+
+function reusableAccessToken(token: TokenData | null): string | null {
+  if (!token?.access_token) return null;
+  const payload = decodeJwt(token.access_token);
+  if (!payload || typeof payload.exp !== "number") return null;
+  const now = Math.floor(Date.now() / 1000);
+  if (payload.exp - now < MIN_REMAINING_SECONDS) return null;
+  // Refresh at least daily so the refresh token never goes stale.
+  if (typeof payload.iat !== "number" || now - payload.iat > MAX_AGE_SECONDS) return null;
+  return token.access_token;
+}
+
+/**
+ * Return a usable access token, refreshing (and rotating) only when the stored
+ * one is missing, old or about to expire.
+ */
+export async function getAccessToken(
+  options: { forceRefresh?: boolean } = {}
+): Promise<RefreshResult> {
+  if (!options.forceRefresh) {
+    const accessToken = reusableAccessToken(loadToken());
+    if (accessToken) return { success: true, accessToken, cached: true };
+  }
+  return refreshToken();
 }
 
 export async function refreshToken(): Promise<RefreshResult> {
-  const { loadToken, saveToken, KEYCLOAK_URL, CLIENT_ID } =
-    await import("./config.js");
-
   const token = loadToken();
   if (!token?.refresh_token) {
     return { success: false, error: "No refresh token found" };
@@ -35,29 +60,13 @@ export async function refreshToken(): Promise<RefreshResult> {
     refresh_token: token.refresh_token,
   });
 
+  let res: Response;
   try {
-    const res = await fetch(KEYCLOAK_URL, {
+    res = await fetch(KEYCLOAK_URL, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body,
     });
-
-    const data: unknown = await res.json().catch(() => null);
-
-    if (!res.ok || !data || typeof data !== "object") {
-      const error =
-        data && typeof data === "object" && "error" in data
-          ? String(data.error)
-          : `HTTP ${res.status}`;
-      return { success: false, error };
-    }
-
-    const token = data as { access_token?: unknown; refresh_token?: unknown };
-    if (typeof token.access_token !== "string" || typeof token.refresh_token !== "string") {
-      return { success: false, error: "Invalid token response" };
-    }
-    saveToken(data as import("./config.js").TokenData);
-    return { success: true, accessToken: token.access_token };
   } catch (e) {
     return {
       success: false,
@@ -65,4 +74,23 @@ export async function refreshToken(): Promise<RefreshResult> {
       networkError: true,
     };
   }
+
+  const data: unknown = await res.json().catch(() => null);
+
+  if (!res.ok || !data || typeof data !== "object") {
+    const error =
+      data && typeof data === "object" && "error" in data
+        ? String(data.error)
+        : `HTTP ${res.status}`;
+    // A server-side outage is not a rejected login; let callers retry it.
+    const transient = res.status >= 500 || res.status === 429;
+    return { success: false, error, networkError: transient };
+  }
+
+  const fresh = data as { access_token?: unknown; refresh_token?: unknown };
+  if (typeof fresh.access_token !== "string" || typeof fresh.refresh_token !== "string") {
+    return { success: false, error: "Invalid token response" };
+  }
+  saveToken(data as TokenData);
+  return { success: true, accessToken: fresh.access_token };
 }
